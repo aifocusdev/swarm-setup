@@ -1,0 +1,308 @@
+# ============================================================================
+# AIFOCUS COMPANY - TRAEFIK DYNAMIC CONFIGURATION
+# Dynamic configuration for TLS, middlewares, and security
+# ============================================================================
+
+# ============================================================================
+# TLS OPTIONS
+# ============================================================================
+tls:
+  options:
+    default:
+      minVersion: "VersionTLS12"
+      maxVersion: "VersionTLS13"
+      sslStrategies:
+        - "tls.SniStrict"
+      cipherSuites:
+        - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+        - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+        - "TLS_RSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_RSA_WITH_AES_128_GCM_SHA256"
+      curvePreferences:
+        - CurveP521
+        - CurveP384
+      alpnProtocols:
+        - h2
+        - http/1.1
+
+    modern:
+      minVersion: "VersionTLS13"
+      maxVersion: "VersionTLS13"
+      cipherSuites:
+        - "TLS_AES_256_GCM_SHA384"
+        - "TLS_CHACHA20_POLY1305_SHA256"
+        - "TLS_AES_128_GCM_SHA256"
+
+# ============================================================================
+# HTTP MIDDLEWARES
+# ============================================================================
+http:
+  middlewares:
+    # Default security headers
+    default-headers:
+      headers:
+        frameDeny: true
+        sslRedirect: true
+        browserXssFilter: true
+        contentTypeNosniff: true
+        forceSTSHeader: true
+        stsIncludeSubdomains: true
+        stsSeconds: 315360000
+        stsPreload: true
+        customRequestHeaders:
+          X-Forwarded-Proto: https
+
+    # Secure headers for APIs
+    api-headers:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - OPTIONS
+          - PUT
+          - POST
+          - DELETE
+          - PATCH
+        accessControlAllowOriginList:
+          - "*"
+        accessControlAllowHeaders:
+          - "*"
+        accessControlMaxAge: 100
+        addVaryHeader: true
+
+    # Basic auth for admin services
+    basic-auth:
+      basicAuth:
+        users:
+          - "admin:$2y$10$8K8fG8RqnZGK8p1QvV8w8OT8H8mH8mH8mH8mH8mH8mH8mH8mH8mH8"
+
+    # Rate limiting
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1m
+
+    # API rate limiting (more strict)
+    api-rate-limit:
+      rateLimit:
+        average: 50
+        burst: 25
+        period: 1m
+
+    # IP whitelist for admin (customize as needed)
+    admin-whitelist:
+      ipWhiteList:
+        sourceRange:
+          - "127.0.0.1/32"
+          - "10.0.0.0/16"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+
+    # Redirect to HTTPS
+    https-redirect:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+    # Compress responses
+    compress:
+      compress: {}
+
+    # Strip prefix for some services
+    strip-prefix:
+      stripPrefix:
+        prefixes:
+          - "/v1"
+          - "/api"
+
+    # Add prefix
+    add-prefix:
+      addPrefix:
+        prefix: "/api"
+
+    # Security for file uploads
+    upload-security:
+      headers:
+        customRequestHeaders:
+          X-Frame-Options: "DENY"
+          X-Content-Type-Options: "nosniff"
+          X-XSS-Protection: "1; mode=block"
+          Content-Security-Policy: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https: wss:; media-src 'self'; object-src 'none'; child-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self';"
+
+    # CORS for frontend apps
+    cors:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - OPTIONS
+          - PUT
+          - POST
+          - DELETE
+          - PATCH
+        accessControlAllowHeaders:
+          - "*"
+        accessControlAllowOriginList:
+          - "*"
+        accessControlMaxAge: 100
+        addVaryHeader: true
+
+    # Error handling
+    error-pages:
+      errors:
+        status:
+          - "400-599"
+        service: error-pages
+        query: "/{status}.html"
+
+    # Circuit breaker
+    circuit-breaker:
+      circuitBreaker:
+        expression: "NetworkErrorRatio() > 0.30"
+
+    # Retry middleware
+    retry:
+      retry:
+        attempts: 3
+        initialInterval: 100ms
+
+    # Request buffering
+    buffering:
+      buffering:
+        maxRequestBodyBytes: 2000000
+        memRequestBodyBytes: 1000000
+        maxResponseBodyBytes: 2000000
+        memResponseBodyBytes: 1000000
+        retryExpression: "IsNetworkError() && Attempts() <= 2"
+
+# ============================================================================
+# GLOBAL MIDDLEWARES CHAIN
+# ============================================================================
+# Common chain for most services
+    default-chain:
+      chain:
+        middlewares:
+          - default-headers
+          - https-redirect
+          - compress
+          - rate-limit
+
+    # Chain for admin services
+    admin-chain:
+      chain:
+        middlewares:
+          - default-headers
+          - https-redirect
+          - compress
+          - admin-whitelist
+          - basic-auth
+          - rate-limit
+
+    # Chain for API services
+    api-chain:
+      chain:
+        middlewares:
+          - api-headers
+          - https-redirect
+          - compress
+          - cors
+          - api-rate-limit
+          - circuit-breaker
+          - retry
+
+    # Chain for public services
+    public-chain:
+      chain:
+        middlewares:
+          - default-headers
+          - https-redirect
+          - compress
+          - rate-limit
+          - error-pages
+
+# ============================================================================
+# TCP MIDDLEWARES (for TCP services)
+# ============================================================================
+tcp:
+  middlewares:
+    # IP whitelist for TCP services
+    tcp-whitelist:
+      ipWhiteList:
+        sourceRange:
+          - "10.0.0.0/16"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+
+# ============================================================================
+# SERVICES (Static definitions)
+# ============================================================================
+  services:
+    # Default backend for unmatched requests
+    default-backend:
+      loadBalancer:
+        servers:
+          - address: "127.0.0.1:8404"
+
+    # Error pages service
+    error-pages:
+      loadBalancer:
+        servers:
+          - address: "error-pages:8080"
+
+# ============================================================================
+# ROUTERS (Static definitions)
+# ============================================================================
+  routers:
+    # Default catch-all router
+    default:
+      rule: "HostRegexp(`{host:.+}`)"
+      priority: 1
+      service: error-pages
+      middlewares:
+        - error-pages
+
+    # API health check endpoint
+    api-health:
+      rule: "Path(`/health`) || Path(`/ping`)"
+      service: api@internal
+      priority: 100
+
+# ============================================================================
+# EXPERIMENTAL FEATURES
+# ============================================================================
+experimental:
+  plugins:
+    # Example plugin configuration (if using plugins)
+    # bouncer:
+    #   moduleName: "github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin"
+    #   version: "v1.1.13"
+
+# ============================================================================
+# PILOT (Traefik Cloud)
+# ============================================================================
+# pilot:
+#   token: "your-pilot-token-here"
+#   dashboard: true
+
+# ============================================================================
+# CERTIFICATES RESOLVERS (Additional configurations)
+# ============================================================================
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "admin@example.com"
+      storage: "/letsencrypt/acme.json"
+      httpChallenge:
+        entryPoint: web
+  
+  # Alternative resolver for DNS challenge (if using Cloudflare)
+  letsencrypt-dns:
+    acme:
+      email: "admin@example.com"
+      storage: "/letsencrypt/acme-dns.json"
+      dnsChallenge:
+        provider: cloudflare
+        delayBeforeCheck: 30
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53" 

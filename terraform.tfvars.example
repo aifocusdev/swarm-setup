@@ -1,0 +1,230 @@
+# ============================================================================
+# AIFOCUS COMPANY - TERRAFORM CONFIGURATION EXAMPLE
+# Copy this file to terraform.tfvars and update with your values
+# ============================================================================
+
+# ============================================================================
+# REQUIRED VARIABLES (You MUST set these)
+# ============================================================================
+
+# Hetzner Cloud API Token (Get from: https://console.hetzner.cloud/)
+hetzner_token = "your-hetzner-api-token-here"
+
+# Your domain name (example: mycompany.com)
+domain = "example.com"
+
+# Email for Let's Encrypt SSL certificates
+email = "admin@example.com"
+
+# SSH Key name in Hetzner Cloud (Create first in Hetzner Console)
+ssh_key_name = "my-ssh-key"
+
+# ============================================================================
+# OPTIONAL CLOUDFLARE INTEGRATION
+# ============================================================================
+
+# Cloudflare API Token (Optional - for automatic DNS management)
+# Get from: https://dash.cloudflare.com/profile/api-tokens
+# cloudflare_token = "your-cloudflare-api-token-here"
+
+# Whether to proxy traffic through Cloudflare (true/false)
+# cloudflare_proxied = false
+
+# ============================================================================
+# INFRASTRUCTURE CONFIGURATION
+# ============================================================================
+
+# Environment name (production, staging, development)
+environment = "production"
+
+# Project name for resource naming
+project_name = "aifocus-swarm"
+
+# ============================================================================
+# SERVER CONFIGURATION
+# ============================================================================
+
+# Ubuntu version to use
+server_image = "ubuntu-22.04"
+
+# Hetzner locations for high availability (multiple locations recommended)
+locations = ["nbg1", "fsn1", "hel1"]
+
+# ============================================================================
+# MANAGER NODES CONFIGURATION
+# ============================================================================
+
+# Number of manager nodes (must be odd: 1, 3, 5, 7)
+# Recommended: 3 for production, 1 for testing
+manager_count = 3
+
+# Server type for manager nodes
+# Options: cx11, cx21, cx31, cx41, cx51
+# Recommended: cx31 for production, cx21 for testing
+manager_server_type = "cx31"
+
+# ============================================================================
+# WORKER NODES CONFIGURATION
+# ============================================================================
+
+# Number of worker nodes
+# Recommended: 2-5 for production, 1-2 for testing
+worker_count = 2
+
+# Server type for worker nodes
+# Options: cx11, cx21, cx31, cx41, cx51
+# Recommended: cx21 for testing, cx31+ for production
+worker_server_type = "cx21"
+
+# ============================================================================
+# LOAD BALANCER CONFIGURATION
+# ============================================================================
+
+# Whether to create a load balancer
+enable_load_balancer = true
+
+# Load balancer type
+# Options: lb11, lb21, lb31
+# Recommended: lb11 for testing, lb21+ for production
+load_balancer_type = "lb11"
+
+# ============================================================================
+# STORAGE CONFIGURATION
+# ============================================================================
+
+# Whether to create additional volumes
+enable_volumes = true
+
+# Size of volumes in GB (per worker node)
+volume_size = 50
+
+# ============================================================================
+# SSH CONFIGURATION
+# ============================================================================
+
+# Path to your SSH private key
+ssh_private_key_path = "~/.ssh/id_rsa"
+
+# ============================================================================
+# NETWORK CONFIGURATION
+# ============================================================================
+
+# Network zone (eu-central recommended for Europe)
+network_zone = "eu-central"
+
+# Private network IP range
+network_ip_range = "10.0.0.0/16"
+
+# Subnet IP range
+subnet_ip_range = "10.0.1.0/24"
+
+# ============================================================================
+# SECURITY CONFIGURATION
+# ============================================================================
+
+# IP addresses allowed for SSH access
+# Use ["0.0.0.0/0"] for testing, restrict for production
+allowed_ips = ["0.0.0.0/0"]
+
+# Whether to enable firewall
+enable_firewall = true
+
+# ============================================================================
+# FEATURES CONFIGURATION
+# ============================================================================
+
+# Whether to enable monitoring stack
+enable_monitoring = true
+
+# Monitoring data retention in days
+monitoring_retention_days = 30
+
+# Whether to enable automatic backups
+enable_backups = true
+
+# Backup schedule (cron format)
+backup_schedule = "0 2 * * *"  # Daily at 2 AM
+
+# ============================================================================
+# ADVANCED CONFIGURATION
+# ============================================================================
+
+# Docker version to install
+docker_version = "24.0"
+
+# Whether to enable log rotation
+enable_log_rotation = true
+
+# Maximum log size before rotation
+max_log_size = "100m"
+
+# Timezone for all servers
+timezone = "UTC"
+
+# ============================================================================
+# RESOURCE TAGS
+# ============================================================================
+
+# Additional tags to apply to all resources
+tags = {
+  "ManagedBy"   = "Terraform"
+  "Project"     = "AiFocus-Swarm"
+  "Environment" = "Production"
+  "Owner"       = "YourName"
+  "Department"  = "IT"
+}
+
+# ============================================================================
+# COST OPTIMIZATION EXAMPLES
+# ============================================================================
+
+# For TESTING/DEVELOPMENT (Lower cost):
+# manager_count = 1
+# worker_count = 1
+# manager_server_type = "cx21"
+# worker_server_type = "cx11"
+# load_balancer_type = "lb11"
+# volume_size = 20
+# enable_backups = false
+
+# For PRODUCTION (High availability):
+# manager_count = 3
+# worker_count = 3
+# manager_server_type = "cx31"
+# worker_server_type = "cx31"
+# load_balancer_type = "lb21"
+# volume_size = 100
+# enable_backups = true
+
+# For HIGH TRAFFIC PRODUCTION:
+# manager_count = 3
+# worker_count = 5
+# manager_server_type = "cx41"
+# worker_server_type = "cx41"
+# load_balancer_type = "lb31"
+# volume_size = 200
+# enable_backups = true
+
+# ============================================================================
+# ESTIMATED MONTHLY COSTS (EUR)
+# ============================================================================
+
+# TESTING SETUP (1 manager, 1 worker, lb11):
+# - 2x cx21 servers: ~20 EUR
+# - 1x lb11 load balancer: ~6 EUR
+# - 1x 20GB volume: ~2 EUR
+# Total: ~28 EUR/month
+
+# PRODUCTION SETUP (3 managers, 2 workers, lb21):
+# - 3x cx31 servers: ~45 EUR
+# - 2x cx21 servers: ~20 EUR  
+# - 1x lb21 load balancer: ~12 EUR
+# - 2x 50GB volumes: ~10 EUR
+# Total: ~87 EUR/month
+
+# HIGH TRAFFIC SETUP (3 managers, 5 workers, lb31):
+# - 3x cx41 servers: ~90 EUR
+# - 5x cx41 servers: ~150 EUR
+# - 1x lb31 load balancer: ~24 EUR
+# - 5x 100GB volumes: ~50 EUR
+# Total: ~314 EUR/month 

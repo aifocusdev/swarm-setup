@@ -1,0 +1,262 @@
+# ============================================================================
+# PORTAINER - DOCKER SWARM MANAGEMENT DASHBOARD
+# High Availability Stack with Agent Architecture
+# ============================================================================
+
+version: '3.8'
+
+services:
+  # Portainer Server (Management Interface)
+  portainer:
+    image: portainer/portainer-ce:2.19.4
+    command: -H tcp://tasks.agent:9001 --tlsskipverify
+    volumes:
+      - portainer-data:/data
+    networks:
+      - traefik-public
+      - aifocus-internal
+    secrets:
+      - portainer_admin_password
+    environment:
+      - PORTAINER_ADMIN_PASSWORD_FILE=/run/secrets/portainer_admin_password
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+          - node.labels.manager.primary == true
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: stop-first
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+      labels:
+        # Traefik labels
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        
+        # HTTP router (will redirect to HTTPS)
+        - traefik.http.routers.portainer-http.rule=Host(`portainer.${DOMAIN}`)
+        - traefik.http.routers.portainer-http.entrypoints=web
+        - traefik.http.routers.portainer-http.middlewares=https-redirect
+        
+        # HTTPS router
+        - traefik.http.routers.portainer-https.rule=Host(`portainer.${DOMAIN}`)
+        - traefik.http.routers.portainer-https.entrypoints=websecure
+        - traefik.http.routers.portainer-https.tls=true
+        - traefik.http.routers.portainer-https.tls.certresolver=letsencrypt
+        - traefik.http.routers.portainer-https.middlewares=default-chain
+        
+        # Service configuration
+        - traefik.http.services.portainer.loadbalancer.server.port=9000
+        
+        # Additional security headers for Portainer
+        - traefik.http.middlewares.portainer-headers.headers.framedeny=false
+        - traefik.http.middlewares.portainer-headers.headers.contenttypenosniff=true
+        - traefik.http.middlewares.portainer-headers.headers.browserxssfilter=true
+        - traefik.http.middlewares.portainer-headers.headers.referrerPolicy=strict-origin-when-cross-origin
+        - traefik.http.middlewares.portainer-headers.headers.customRequestHeaders.X-Forwarded-Proto=https
+        
+        # Rate limiting for Portainer
+        - traefik.http.middlewares.portainer-ratelimit.ratelimit.average=30
+        - traefik.http.middlewares.portainer-ratelimit.ratelimit.burst=20
+        
+        # Middleware chain for Portainer
+        - traefik.http.middlewares.portainer-chain.chain.middlewares=portainer-headers,portainer-ratelimit,compress
+        - traefik.http.routers.portainer-https.middlewares=portainer-chain
+    
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9000/api/system/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Portainer Agent (Runs on all nodes)
+  agent:
+    image: portainer/agent:2.19.4
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+    networks:
+      - aifocus-internal
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.platform.os == linux
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+    environment:
+      AGENT_CLUSTER_ADDR: tasks.agent
+
+  # Portainer Edge Agent (Optional)
+  edge-agent:
+    image: portainer/agent:2.19.4
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+      - /:/host
+    networks:
+      - aifocus-internal
+    environment:
+      EDGE: 1
+      EDGE_ID: ${EDGE_ID:-}
+      EDGE_KEY: ${EDGE_KEY:-}
+      EDGE_INSECURE_POLL: 1
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.platform.os == linux
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+    # Conditional deployment - only if EDGE_ID is set
+    profiles:
+      - edge
+
+  # Watchtower for automatic updates (opcional)
+  watchtower:
+    image: containrrr/watchtower:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - aifocus-internal
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=3600
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_REVIVE_STOPPED=false
+      - WATCHTOWER_NO_STARTUP_MESSAGE=false
+      - WATCHTOWER_TIMEOUT=30s
+      - WATCHTOWER_SCHEDULE=0 0 4 * * *
+      - WATCHTOWER_NOTIFICATIONS=slack
+      - WATCHTOWER_NOTIFICATION_SLACK_HOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - WATCHTOWER_NOTIFICATION_SLACK_IDENTIFIER=AiFocus-Watchtower
+      - WATCHTOWER_NOTIFICATION_SLACK_CHANNEL=#devops
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+    # Conditional deployment - only if ENABLE_WATCHTOWER is true
+    profiles:
+      - watchtower
+
+  # Docker Registry UI (opcional)
+  registry-ui:
+    image: joxit/docker-registry-ui:main
+    networks:
+      - traefik-public
+      - aifocus-internal
+    environment:
+      - REGISTRY_TITLE=AiFocus Docker Registry
+      - REGISTRY_URL=https://registry.${DOMAIN}
+      - SINGLE_REGISTRY=true
+      - CATALOG_ELEMENTS_LIMIT=1000
+      - DELETE_IMAGES=true
+      - SHOW_CONTENT_DIGEST=true
+      - NGINX_PROXY_PASS_URL=https://registry.${DOMAIN}
+      - SHOW_CATALOG_NB_TAGS=true
+      - CATALOG_MIN_BRANCHES=1
+      - CATALOG_MAX_BRANCHES=1
+      - TAGLIST_PAGE_SIZE=100
+      - REGISTRY_SECURED=false
+      - CATALOG_DEFAULT_EXPANDED=false
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == worker
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.http.routers.registry-ui.rule=Host(`registry-ui.${DOMAIN}`)
+        - traefik.http.routers.registry-ui.entrypoints=websecure
+        - traefik.http.routers.registry-ui.tls=true
+        - traefik.http.routers.registry-ui.tls.certresolver=letsencrypt
+        - traefik.http.routers.registry-ui.middlewares=default-chain
+        - traefik.http.services.registry-ui.loadbalancer.server.port=80
+    profiles:
+      - registry
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+
+volumes:
+  portainer-data:
+    driver: local
+
+# ============================================================================
+# NETWORKS
+# ============================================================================
+
+networks:
+  traefik-public:
+    external: true
+  
+  aifocus-internal:
+    external: true
+
+# ============================================================================
+# SECRETS
+# ============================================================================
+
+secrets:
+  portainer_admin_password:
+    external: true
+
+# ============================================================================
+# CONFIGS
+# ============================================================================
+
+configs:
+  portainer_settings:
+    external: true

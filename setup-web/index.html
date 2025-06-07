@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AiFocus Swarm Setup - Infraestrutura Enterprise</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .loading {
+            display: none;
+        }
+        .step {
+            display: none;
+        }
+        .step.active {
+            display: block;
+        }
+        .progress-bar {
+            transition: width 0.5s ease;
+        }
+    </style>
+</head>
+<body class="gradient-bg min-h-screen">
+    <!-- Header -->
+    <header class="text-white py-6">
+        <div class="container mx-auto px-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center">
+                    <i class="fas fa-cloud text-3xl mr-3"></i>
+                    <h1 class="text-2xl font-bold">AiFocus Swarm Setup</h1>
+                </div>
+                <div class="text-sm">
+                    <i class="fas fa-shield-alt mr-1"></i>
+                    Enterprise Infrastructure
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Progress Bar -->
+    <div class="container mx-auto px-4 mb-8">
+        <div class="glass-effect rounded-lg p-4">
+            <div class="flex justify-between text-white text-sm mb-2">
+                <span>Configuração</span>
+                <span id="progress-text">0%</span>
+            </div>
+            <div class="w-full bg-gray-300 bg-opacity-30 rounded-full h-2">
+                <div id="progress-bar" class="progress-bar bg-green-500 h-2 rounded-full" style="width: 0%"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="container mx-auto px-4">
+        <div class="max-w-4xl mx-auto">
+            <!-- Welcome Step -->
+            <div id="step-welcome" class="step active">
+                <div class="glass-effect rounded-lg p-8 text-white">
+                    <div class="text-center mb-8">
+                        <i class="fas fa-rocket text-6xl mb-4"></i>
+                        <h2 class="text-3xl font-bold mb-4">Bem-vindo ao AiFocus Swarm</h2>
+                        <p class="text-lg mb-6">Configure sua infraestrutura enterprise em poucos cliques</p>
+                    </div>
+
+                    <div class="grid md:grid-cols-3 gap-6 mb-8">
+                        <div class="text-center">
+                            <i class="fas fa-server text-3xl mb-2"></i>
+                            <h3 class="font-bold">Multi-Server</h3>
+                            <p class="text-sm">Alta disponibilidade</p>
+                        </div>
+                        <div class="text-center">
+                            <i class="fas fa-lock text-3xl mb-2"></i>
+                            <h3 class="font-bold">SSL Automático</h3>
+                            <p class="text-sm">Let's Encrypt</p>
+                        </div>
+                        <div class="text-center">
+                            <i class="fas fa-chart-line text-3xl mb-2"></i>
+                            <h3 class="font-bold">Monitoramento</h3>
+                            <p class="text-sm">Prometheus + Grafana</p>
+                        </div>
+                    </div>
+
+                    <div class="text-center">
+                        <button onclick="nextStep()" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-lg transition duration-300">
+                            <i class="fas fa-play mr-2"></i>
+                            Começar Setup
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Configuration Step -->
+            <div id="step-config" class="step">
+                <div class="glass-effect rounded-lg p-8 text-white">
+                    <h2 class="text-2xl font-bold mb-6 text-center">
+                        <i class="fas fa-cog mr-2"></i>
+                        Configuração da Infraestrutura
+                    </h2>
+
+                    <form id="setup-form" class="space-y-6">
+                        <!-- Hetzner Token -->
+                        <div>
+                            <label class="block text-sm font-bold mb-2">
+                                <i class="fas fa-key mr-1"></i>
+                                Token da API Hetzner Cloud *
+                            </label>
+                            <input type="password" id="hetzner-token" required 
+                                class="w-full px-3 py-2 bg-white bg-opacity-20 rounded border border-gray-300 border-opacity-30 text-white placeholder-gray-300"
+                                placeholder="Seu token da API Hetzner">
+                            <p class="text-xs mt-1 text-gray-300">
+                                <a href="https://console.hetzner.cloud/" target="_blank" class="underline">
+                                    Gere em: console.hetzner.cloud → Security → API Tokens
+                                </a>
+                            </p>
+                        </div>
+
+                        <!-- Domain -->
+                        <div>
+                            <label class="block text-sm font-bold mb-2">
+                                <i class="fas fa-globe mr-1"></i>
+                                Seu Domínio *
+                            </label>
+                            <input type="text" id="domain" required 
+                                class="w-full px-3 py-2 bg-white bg-opacity-20 rounded border border-gray-300 border-opacity-30 text-white placeholder-gray-300"
+                                placeholder="exemplo: minhaempresa.com">
+                        </div>
+
+                        <!-- Email -->
+                        <div>
+                            <label class="block text-sm font-bold mb-2">
+                                <i class="fas fa-envelope mr-1"></i>
+                                Email para SSL *
+                            </label>
+                            <input type="email" id="email" required 
+                                class="w-full px-3 py-2 bg-white bg-opacity-20 rounded border border-gray-300 border-opacity-30 text-white placeholder-gray-300"
+                                placeholder="admin@minhaempresa.com">
+                        </div>
+
+                        <!-- SSH Key -->
+                        <div>
+                            <label class="block text-sm font-bold mb-2">
+                                <i class="fas fa-fingerprint mr-1"></i>
+                                Nome da Chave SSH no Hetzner *
+                            </label>
+                            <input type="text" id="ssh-key" required 
+                                class="w-full px-3 py-2 bg-white bg-opacity-20 rounded border border-gray-300 border-opacity-30 text-white placeholder-gray-300"
+                                placeholder="minha-chave-ssh">
+                        </div>
+
+                        <!-- Server Configuration -->
+                        <div class="grid md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-bold mb-2">Managers</label>
+                                <select id="manager-count" class="w-full px-3 py-2 bg-white bg-opacity-20 rounded border border-gray-300 border-opacity-30 text-white">
+                                    <option value="1">1 Manager</option>
+                                    <option value="3" selected>3 Managers (HA)</option>
+                                    <option value="5">5 Managers</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold mb-2">Workers</label>
+                                <select id="worker-count" class="w-full px-3 py-2 bg-white bg-opacity-20 rounded border border-gray-300 border-opacity-30 text-white">
+                                    <option value="1">1 Worker</option>
+                                    <option value="2" selected>2 Workers</option>
+                                    <option value="3">3 Workers</option>
+                                    <option value="5">5 Workers</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Server Types -->
+                        <div class="grid md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-bold mb-2">Tipo Manager</label>
+                                <select id="manager-type" class="w-full px-3 py-2 bg-white bg-opacity-20 rounded border border-gray-300 border-opacity-30 text-white">
+                                    <option value="cx21">cx21 (2 vCPU, 4GB RAM) - €6/mês</option>
+                                    <option value="cx31" selected>cx31 (2 vCPU, 8GB RAM) - €15/mês</option>
+                                    <option value="cx41">cx41 (4 vCPU, 16GB RAM) - €30/mês</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold mb-2">Tipo Worker</label>
+                                <select id="worker-type" class="w-full px-3 py-2 bg-white bg-opacity-20 rounded border border-gray-300 border-opacity-30 text-white">
+                                    <option value="cx11">cx11 (1 vCPU, 4GB RAM) - €3/mês</option>
+                                    <option value="cx21" selected>cx21 (2 vCPU, 4GB RAM) - €6/mês</option>
+                                    <option value="cx31">cx31 (2 vCPU, 8GB RAM) - €15/mês</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Optional Features -->
+                        <div class="space-y-3">
+                            <h3 class="font-bold">Features Opcionais:</h3>
+                            <label class="flex items-center">
+                                <input type="checkbox" id="enable-lb" checked class="mr-2">
+                                Load Balancer (+€6/mês)
+                            </label>
+                            <label class="flex items-center">
+                                <input type="checkbox" id="enable-volumes" checked class="mr-2">
+                                Volumes Extras (+€4/mês)
+                            </label>
+                            <label class="flex items-center">
+                                <input type="checkbox" id="enable-monitoring" checked class="mr-2">
+                                Stack de Monitoramento
+                            </label>
+                        </div>
+
+                        <!-- Cloudflare Token (Optional) -->
+                        <div>
+                            <label class="block text-sm font-bold mb-2">
+                                <i class="fab fa-cloudflare mr-1"></i>
+                                Token Cloudflare (Opcional)
+                            </label>
+                            <input type="password" id="cloudflare-token" 
+                                class="w-full px-3 py-2 bg-white bg-opacity-20 rounded border border-gray-300 border-opacity-30 text-white placeholder-gray-300"
+                                placeholder="Para DNS automático">
+                        </div>
+
+                        <!-- Cost Estimation -->
+                        <div class="glass-effect rounded p-4">
+                            <h3 class="font-bold mb-2">💰 Custo Estimado Mensal:</h3>
+                            <div id="cost-breakdown" class="text-sm space-y-1">
+                                <div>Calculando...</div>
+                            </div>
+                            <div class="font-bold text-lg mt-2">
+                                Total: <span id="total-cost">€0</span>/mês
+                            </div>
+                        </div>
+
+                        <!-- Buttons -->
+                        <div class="flex justify-between">
+                            <button type="button" onclick="prevStep()" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-6 rounded">
+                                <i class="fas fa-arrow-left mr-2"></i>
+                                Voltar
+                            </button>
+                            <button type="button" onclick="nextStep()" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded">
+                                Configurar Infraestrutura
+                                <i class="fas fa-arrow-right ml-2"></i>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Deploy Step -->
+            <div id="step-deploy" class="step">
+                <div class="glass-effect rounded-lg p-8 text-white">
+                    <h2 class="text-2xl font-bold mb-6 text-center">
+                        <i class="fas fa-rocket mr-2"></i>
+                        Deploy da Infraestrutura
+                    </h2>
+
+                    <div id="deploy-status" class="space-y-4">
+                        <div class="text-center">
+                            <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+                            <p class="mt-4">Preparando deploy...</p>
+                        </div>
+                    </div>
+
+                    <div id="deploy-logs" class="mt-6 bg-black bg-opacity-50 rounded p-4 h-64 overflow-y-auto font-mono text-sm" style="display: none;">
+                        <!-- Logs will appear here -->
+                    </div>
+
+                    <div class="mt-6 text-center">
+                        <button id="deploy-btn" onclick="startDeploy()" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-lg">
+                            <i class="fas fa-play mr-2"></i>
+                            Iniciar Deploy
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Success Step -->
+            <div id="step-success" class="step">
+                <div class="glass-effect rounded-lg p-8 text-white text-center">
+                    <i class="fas fa-check-circle text-6xl text-green-400 mb-4"></i>
+                    <h2 class="text-3xl font-bold mb-4">🎉 Infraestrutura Criada!</h2>
+                    <p class="text-lg mb-6">Sua infraestrutura enterprise está funcionando!</p>
+
+                    <div id="access-links" class="grid md:grid-cols-2 gap-4 mb-8">
+                        <!-- Links will be populated dynamically -->
+                    </div>
+
+                    <div class="space-y-4">
+                        <p class="text-sm">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            Aguarde 5-10 minutos para configuração completa dos servidores
+                        </p>
+                        
+                        <div class="flex justify-center space-x-4">
+                            <button onclick="downloadConfig()" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded">
+                                <i class="fas fa-download mr-2"></i>
+                                Baixar Config
+                            </button>
+                            <button onclick="viewDocs()" class="bg-purple-500 hover:bg-purple-600 text-white font-bold py-2 px-6 rounded">
+                                <i class="fas fa-book mr-2"></i>
+                                Documentação
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="text-white text-center py-6 mt-12">
+        <p>&copy; 2024 AiFocus Company - Infraestrutura Enterprise Simplificada</p>
+    </footer>
+
+    <script>
+        let currentStep = 0;
+        const steps = ['welcome', 'config', 'deploy', 'success'];
+        let setupConfig = {};
+
+        function updateProgress() {
+            const progress = (currentStep / (steps.length - 1)) * 100;
+            document.getElementById('progress-bar').style.width = progress + '%';
+            document.getElementById('progress-text').textContent = Math.round(progress) + '%';
+        }
+
+        function showStep(stepIndex) {
+            // Hide all steps
+            document.querySelectorAll('.step').forEach(step => {
+                step.classList.remove('active');
+            });
+            
+            // Show current step
+            document.getElementById('step-' + steps[stepIndex]).classList.add('active');
+            
+            updateProgress();
+        }
+
+        function nextStep() {
+            if (currentStep < steps.length - 1) {
+                if (currentStep === 1) {
+                    // Validate form before proceeding
+                    if (!validateForm()) return;
+                    prepareDeployStep();
+                }
+                currentStep++;
+                showStep(currentStep);
+            }
+        }
+
+        function prevStep() {
+            if (currentStep > 0) {
+                currentStep--;
+                showStep(currentStep);
+            }
+        }
+
+        function validateForm() {
+            const required = ['hetzner-token', 'domain', 'email', 'ssh-key'];
+            for (let field of required) {
+                if (!document.getElementById(field).value.trim()) {
+                    alert('Por favor, preencha todos os campos obrigatórios.');
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function calculateCost() {
+            const managerCount = parseInt(document.getElementById('manager-count').value);
+            const workerCount = parseInt(document.getElementById('worker-count').value);
+            const managerType = document.getElementById('manager-type').value;
+            const workerType = document.getElementById('worker-type').value;
+            const enableLB = document.getElementById('enable-lb').checked;
+            const enableVolumes = document.getElementById('enable-volumes').checked;
+
+            const costs = {
+                'cx11': 3, 'cx21': 6, 'cx31': 15, 'cx41': 30
+            };
+
+            const managerCost = costs[managerType] * managerCount;
+            const workerCost = costs[workerType] * workerCount;
+            const lbCost = enableLB ? 6 : 0;
+            const volumesCost = enableVolumes ? (workerCount * 2) : 0;
+
+            const total = managerCost + workerCost + lbCost + volumesCost;
+
+            const breakdown = document.getElementById('cost-breakdown');
+            breakdown.innerHTML = `
+                <div>${managerCount} Managers (${managerType}): €${managerCost}</div>
+                <div>${workerCount} Workers (${workerType}): €${workerCost}</div>
+                ${enableLB ? '<div>Load Balancer: €' + lbCost + '</div>' : ''}
+                ${enableVolumes ? '<div>Volumes: €' + volumesCost + '</div>' : ''}
+            `;
+
+            document.getElementById('total-cost').textContent = '€' + total;
+        }
+
+        function prepareDeployStep() {
+            // Collect configuration
+            setupConfig = {
+                hetzner_token: document.getElementById('hetzner-token').value,
+                domain: document.getElementById('domain').value,
+                email: document.getElementById('email').value,
+                ssh_key_name: document.getElementById('ssh-key').value,
+                manager_count: document.getElementById('manager-count').value,
+                worker_count: document.getElementById('worker-count').value,
+                manager_server_type: document.getElementById('manager-type').value,
+                worker_server_type: document.getElementById('worker-type').value,
+                enable_load_balancer: document.getElementById('enable-lb').checked,
+                enable_volumes: document.getElementById('enable-volumes').checked,
+                enable_monitoring: document.getElementById('enable-monitoring').checked,
+                cloudflare_token: document.getElementById('cloudflare-token').value
+            };
+        }
+
+        async function startDeploy() {
+            const deployBtn = document.getElementById('deploy-btn');
+            const deployLogs = document.getElementById('deploy-logs');
+            
+            deployBtn.style.display = 'none';
+            deployLogs.style.display = 'block';
+            
+            try {
+                const response = await fetch('/api/deploy', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(setupConfig)
+                });
+
+                if (response.ok) {
+                    // Success - move to next step
+                    setTimeout(() => {
+                        nextStep();
+                        populateSuccessLinks();
+                    }, 2000);
+                } else {
+                    throw new Error('Deploy failed');
+                }
+            } catch (error) {
+                deployLogs.innerHTML += '<div class="text-red-400">❌ Erro no deploy: ' + error.message + '</div>';
+            }
+        }
+
+        function populateSuccessLinks() {
+            const domain = setupConfig.domain;
+            const linksContainer = document.getElementById('access-links');
+            
+            const links = [
+                { name: 'Portainer', url: `https://portainer.${domain}`, icon: 'fas fa-docker' },
+                { name: 'Traefik', url: `https://traefik.${domain}`, icon: 'fas fa-route' },
+                { name: 'Grafana', url: `https://grafana.${domain}`, icon: 'fas fa-chart-line' },
+                { name: 'Prometheus', url: `https://prometheus.${domain}`, icon: 'fas fa-fire' }
+            ];
+
+            linksContainer.innerHTML = links.map(link => `
+                <a href="${link.url}" target="_blank" class="block bg-white bg-opacity-20 rounded-lg p-4 hover:bg-opacity-30 transition duration-300">
+                    <i class="${link.icon} text-2xl mb-2"></i>
+                    <div class="font-bold">${link.name}</div>
+                    <div class="text-sm text-gray-300">${link.url}</div>
+                </a>
+            `).join('');
+        }
+
+        function downloadConfig() {
+            const config = JSON.stringify(setupConfig, null, 2);
+            const blob = new Blob([config], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'aifocus-swarm-config.json';
+            a.click();
+        }
+
+        function viewDocs() {
+            window.open('/setup/docs/', '_blank');
+        }
+
+        // Event listeners
+        document.addEventListener('DOMContentLoaded', function() {
+            // Calculate cost on change
+            ['manager-count', 'worker-count', 'manager-type', 'worker-type', 'enable-lb', 'enable-volumes'].forEach(id => {
+                document.getElementById(id).addEventListener('change', calculateCost);
+            });
+
+            // Initial cost calculation
+            calculateCost();
+        });
+    </script>
+</body>
+</html> 

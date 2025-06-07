@@ -1,0 +1,249 @@
+# ============================================================================
+# TRAEFIK - REVERSE PROXY & SSL TERMINATION
+# High Availability Docker Swarm Stack
+# ============================================================================
+
+version: '3.8'
+
+networks:
+  traefik-public:
+    external: true
+  aifocus-internal:
+    external: true
+
+volumes:
+  traefik-data:
+    driver: local
+  traefik-ssl:
+    driver: local
+
+configs:
+  traefik-config:
+    file: ./configs/traefik.yml
+  traefik-dynamic:
+    file: ./configs/traefik-dynamic.yml
+
+secrets:
+  cloudflare-token:
+    external: true
+
+services:
+  traefik:
+    image: traefik:v3.0
+    command:
+      # Enable Docker provider
+      - --providers.docker=true
+      - --providers.docker.swarmMode=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=traefik-public
+      
+      # Enable file provider for dynamic config
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --providers.file.watch=true
+      
+      # Configure entrypoints
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      
+      # Global HTTP to HTTPS redirect
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+      
+      # Let's Encrypt configuration
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      
+      # API and Dashboard
+      - --api=true
+      - --api.dashboard=true
+      - --api.insecure=false
+      
+      # Metrics
+      - --metrics.prometheus=true
+      - --metrics.prometheus.addentrypointslabels=true
+      - --metrics.prometheus.addserviceslabels=true
+      
+      # Logging
+      - --log.level=INFO
+      - --accesslog=true
+      - --accesslog.fields.defaultmode=keep
+      - --accesslog.fields.headers.defaultmode=drop
+      
+      # Security headers
+      - --entrypoints.websecure.http.tls.options=default@file
+      
+    ports:
+      - "80:80"
+      - "443:443"
+    
+    networks:
+      - traefik-public
+      - aifocus-internal
+    
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-data:/data
+      - traefik-ssl:/letsencrypt
+    
+    configs:
+      - source: traefik-dynamic
+        target: /etc/traefik/dynamic.yml
+    
+    environment:
+      - ACME_EMAIL=${ACME_EMAIL:-admin@example.com}
+      - DOMAIN=${DOMAIN:-example.com}
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+          - node.labels.manager.primary == true
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+      labels:
+        # Traefik labels for its own dashboard
+        - traefik.enable=true
+        - traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN}`)
+        - traefik.http.routers.traefik-dashboard.service=api@internal
+        - traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt
+        - traefik.http.routers.traefik-dashboard.middlewares=traefik-auth
+        
+        # Basic auth middleware for dashboard (admin:admin)
+        # Change this password in production!
+        - traefik.http.middlewares.traefik-auth.basicauth.users=admin:$$2y$$10$$8K8fG8RqnZGK8p1QvV8w8OT8H8mH8mH8mH8mH8mH8mH8mH8mH8mH8
+        
+        # Service configuration
+        - traefik.http.services.traefik-dashboard.loadbalancer.server.port=8080
+        
+        # Security headers middleware
+        - traefik.http.middlewares.security-headers.headers.framedeny=true
+        - traefik.http.middlewares.security-headers.headers.sslredirect=true
+        - traefik.http.middlewares.security-headers.headers.browserxssfilter=true
+        - traefik.http.middlewares.security-headers.headers.contenttypenosniff=true
+        - traefik.http.middlewares.security-headers.headers.forceststheader=true
+        - traefik.http.middlewares.security-headers.headers.stsincludesubdomains=true
+        - traefik.http.middlewares.security-headers.headers.stsseconds=315360000
+        - traefik.http.middlewares.security-headers.headers.stspreload=true
+        
+        # CORS headers
+        - traefik.http.middlewares.cors-headers.headers.accesscontrolallowmethods=GET,OPTIONS,PUT,POST,DELETE,PATCH
+        - traefik.http.middlewares.cors-headers.headers.accesscontrolallowheaders=*
+        - traefik.http.middlewares.cors-headers.headers.accesscontrolmaxage=100
+        - traefik.http.middlewares.cors-headers.headers.addvaryheader=true
+        
+        # Rate limiting
+        - traefik.http.middlewares.rate-limit.ratelimit.average=100
+        - traefik.http.middlewares.rate-limit.ratelimit.burst=50
+        
+        # IP whitelist for admin (adjust as needed)
+        # - traefik.http.middlewares.admin-whitelist.ipwhitelist.sourcerange=127.0.0.1/32,10.0.0.0/16
+        
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  traefik-certs-dumper:
+    image: ldez/traefik-certs-dumper:v2.8.1
+    command: file --source /data/acme.json --dest /certs --watch
+    volumes:
+      - traefik-ssl:/data:ro
+      - traefik-data:/certs
+    networks:
+      - aifocus-internal
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+          - node.labels.manager.primary == true
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+    depends_on:
+      - traefik
+
+  whoami:
+    image: traefik/whoami:v1.8
+    networks:
+      - traefik-public
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == worker
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.whoami.rule=Host(`whoami.${DOMAIN}`)
+        - traefik.http.routers.whoami.tls.certresolver=letsencrypt
+        - traefik.http.services.whoami.loadbalancer.server.port=80
+        - traefik.http.routers.whoami.middlewares=security-headers
+
+  # Error pages service
+  error-pages:
+    image: tarampampam/error-pages:2.26
+    environment:
+      TEMPLATE_NAME: cats
+    networks:
+      - traefik-public
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == worker
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.error-pages.rule=HostRegexp(`{host:.+}`)
+        - traefik.http.routers.error-pages.priority=1
+        - traefik.http.routers.error-pages.middlewares=error-pages-middleware
+        - traefik.http.services.error-pages.loadbalancer.server.port=8080
+        
+        # Error pages middleware
+        - traefik.http.middlewares.error-pages-middleware.errors.status=400-599
+        - traefik.http.middlewares.error-pages-middleware.errors.service=error-pages
+        - traefik.http.middlewares.error-pages-middleware.errors.query=/{status}.html
+
+# ============================================================================
+# TRAEFIK DYNAMIC CONFIGURATION
+# ============================================================================

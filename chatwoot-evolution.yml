@@ -1,0 +1,667 @@
+# ============================================================================
+# DATABASE STACK - PostgreSQL + Redis + MongoDB + Management Tools
+# High Availability with Clustering and Replication
+# ============================================================================
+
+version: '3.8'
+
+services:
+  # ============================================================================
+  # POSTGRESQL CLUSTER (Primary/Replica)
+  # ============================================================================
+  
+  postgres-primary:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aifocus}
+      POSTGRES_USER: ${POSTGRES_USER:-aifocus}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_REPLICATION_USER: ${POSTGRES_REPLICATION_USER:-replicator}
+      POSTGRES_REPLICATION_PASSWORD_FILE: /run/secrets/postgres_replication_password
+      
+      # Primary server configuration
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+      POSTGRES_HOST_AUTH_METHOD: md5
+      
+    volumes:
+      - postgres_primary_data:/var/lib/postgresql/data
+      - postgres_config:/etc/postgresql
+      - postgres_logs:/var/log/postgresql
+    
+    configs:
+      - source: postgres_primary_conf
+        target: /etc/postgresql/postgresql.conf
+      - source: postgres_hba_conf
+        target: /etc/postgresql/pg_hba.conf
+      - source: postgres_init_script
+        target: /docker-entrypoint-initdb.d/01-init.sql
+    
+    secrets:
+      - postgres_password
+      - postgres_replication_password
+    
+    networks:
+      - database-internal
+      - traefik-public
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.database.postgres.primary == true
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+      labels:
+        - postgres.role=primary
+        - postgres.cluster=aifocus-cluster
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aifocus} -d ${POSTGRES_DB:-aifocus}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  postgres-replica:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aifocus}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_MASTER_SERVICE: postgres-primary
+      POSTGRES_REPLICATION_USER: ${POSTGRES_REPLICATION_USER:-replicator}
+      POSTGRES_REPLICATION_PASSWORD_FILE: /run/secrets/postgres_replication_password
+      PGUSER: ${POSTGRES_USER:-aifocus}
+      
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+      - postgres_config:/etc/postgresql
+      - postgres_logs:/var/log/postgresql
+    
+    configs:
+      - source: postgres_replica_conf
+        target: /etc/postgresql/postgresql.conf
+      - source: postgres_hba_conf
+        target: /etc/postgresql/pg_hba.conf
+      - source: postgres_replica_script
+        target: /docker-entrypoint-initdb.d/01-replica.sh
+    
+    secrets:
+      - postgres_password
+      - postgres_replication_password
+    
+    networks:
+      - database-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.database.postgres.replica == true
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 1.5G
+          cpus: '0.8'
+        reservations:
+          memory: 512M
+          cpus: '0.3'
+      labels:
+        - postgres.role=replica
+        - postgres.cluster=aifocus-cluster
+    
+    depends_on:
+      - postgres-primary
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aifocus}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # ============================================================================
+  # PGADMIN - PostgreSQL Management
+  # ============================================================================
+  
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@${DOMAIN}}
+      PGADMIN_DEFAULT_PASSWORD_FILE: /run/secrets/pgadmin_password
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "True"
+      PGADMIN_CONFIG_LOGIN_BANNER: "AiFocus Company - PostgreSQL Management"
+      PGADMIN_CONFIG_CONSOLE_LOG_LEVEL: 30
+    
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - pgadmin_config:/pgadmin4/config
+    
+    configs:
+      - source: pgadmin_servers
+        target: /pgadmin4/servers.json
+    
+    secrets:
+      - pgadmin_password
+    
+    networks:
+      - traefik-public
+      - database-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.2'
+      labels:
+        # Traefik configuration
+        - traefik.enable=true
+        - traefik.http.routers.pgadmin.rule=Host(`pgadmin.${DOMAIN}`)
+        - traefik.http.routers.pgadmin.tls=true
+        - traefik.http.routers.pgadmin.tls.certresolver=letsencrypt
+        - traefik.http.services.pgadmin.loadbalancer.server.port=80
+        - traefik.docker.network=traefik-public
+        
+        # Security middleware
+        - traefik.http.routers.pgadmin.middlewares=auth@docker,security-headers@docker
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost/misc/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ============================================================================
+  # REDIS CLUSTER
+  # ============================================================================
+  
+  redis-master:
+    image: redis:7-alpine
+    command: 
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+      - --requirepass
+      - /run/secrets/redis_password
+    
+    volumes:
+      - redis_master_data:/data
+    
+    configs:
+      - source: redis_master_conf
+        target: /usr/local/etc/redis/redis.conf
+    
+    secrets:
+      - redis_password
+    
+    networks:
+      - database-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.database.redis.master == true
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.2'
+      labels:
+        - redis.role=master
+        - redis.cluster=aifocus-cluster
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  redis-replica:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+      - --requirepass
+      - /run/secrets/redis_password
+      - --replicaof
+      - redis-master
+      - "6379"
+    
+    volumes:
+      - redis_replica_data:/data
+    
+    configs:
+      - source: redis_replica_conf
+        target: /usr/local/etc/redis/redis.conf
+    
+    secrets:
+      - redis_password
+    
+    networks:
+      - database-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.database.redis.replica == true
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.3'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+      labels:
+        - redis.role=replica
+        - redis.cluster=aifocus-cluster
+    
+    depends_on:
+      - redis-master
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+  # ============================================================================
+  # REDIS INSIGHT - Redis Management
+  # ============================================================================
+  
+  redis-insight:
+    image: redislabs/redisinsight:latest
+    volumes:
+      - redis_insight_data:/db
+    
+    networks:
+      - traefik-public
+      - database-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.3'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+      labels:
+        # Traefik configuration
+        - traefik.enable=true
+        - traefik.http.routers.redis-insight.rule=Host(`redis-insight.${DOMAIN}`)
+        - traefik.http.routers.redis-insight.tls=true
+        - traefik.http.routers.redis-insight.tls.certresolver=letsencrypt
+        - traefik.http.services.redis-insight.loadbalancer.server.port=8001
+        - traefik.docker.network=traefik-public
+        
+        # Security middleware
+        - traefik.http.routers.redis-insight.middlewares=auth@docker,security-headers@docker
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # MONGODB REPLICA SET
+  # ============================================================================
+  
+  mongodb-primary:
+    image: mongo:7
+    command: 
+      - mongod
+      - --replSet
+      - rs0
+      - --auth
+      - --keyFile
+      - /etc/mongodb/keyfile
+    
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_root_password
+      MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE:-aifocus}
+    
+    volumes:
+      - mongodb_primary_data:/data/db
+      - mongodb_config:/data/configdb
+    
+    configs:
+      - source: mongodb_keyfile
+        target: /etc/mongodb/keyfile
+        mode: 0600
+      - source: mongodb_init_script
+        target: /docker-entrypoint-initdb.d/init-replica.js
+    
+    secrets:
+      - mongo_root_password
+      - mongo_user_password
+    
+    networks:
+      - database-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.database.mongodb.primary == true
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+      labels:
+        - mongodb.role=primary
+        - mongodb.replica-set=rs0
+    
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  mongodb-secondary:
+    image: mongo:7
+    command:
+      - mongod
+      - --replSet
+      - rs0
+      - --auth
+      - --keyFile
+      - /etc/mongodb/keyfile
+    
+    volumes:
+      - mongodb_secondary_data:/data/db
+      - mongodb_config:/data/configdb
+    
+    configs:
+      - source: mongodb_keyfile
+        target: /etc/mongodb/keyfile
+        mode: 0600
+    
+    networks:
+      - database-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.database.mongodb.secondary == true
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.2'
+      labels:
+        - mongodb.role=secondary
+        - mongodb.replica-set=rs0
+    
+    depends_on:
+      - mongodb-primary
+    
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+
+volumes:
+  # PostgreSQL
+  postgres_primary_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/postgres/primary
+  
+  postgres_replica_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/postgres/replica
+  
+  postgres_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/config/postgres
+  
+  postgres_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/logs/postgres
+  
+  # PgAdmin
+  pgadmin_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/pgadmin
+  
+  pgadmin_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/config/pgadmin
+  
+  # Redis
+  redis_master_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/redis/master
+  
+  redis_replica_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/redis/replica
+  
+  redis_insight_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/redis-insight
+  
+  # MongoDB
+  mongodb_primary_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/mongodb/primary
+  
+  mongodb_secondary_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/mongodb/secondary
+  
+  mongodb_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/config/mongodb
+
+# ============================================================================
+# NETWORKS
+# ============================================================================
+
+networks:
+  traefik-public:
+    external: true
+  
+  database-internal:
+    driver: overlay
+    attachable: true
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+
+# ============================================================================
+# SECRETS
+# ============================================================================
+
+secrets:
+  postgres_password:
+    external: true
+  postgres_replication_password:
+    external: true
+  pgadmin_password:
+    external: true
+  redis_password:
+    external: true
+  mongo_root_password:
+    external: true
+  mongo_user_password:
+    external: true
+
+# ============================================================================
+# CONFIGS
+# ============================================================================
+
+configs:
+  postgres_primary_conf:
+    external: true
+  postgres_replica_conf:
+    external: true
+  postgres_hba_conf:
+    external: true
+  postgres_init_script:
+    external: true
+  postgres_replica_script:
+    external: true
+  pgadmin_servers:
+    external: true
+  redis_master_conf:
+    external: true
+  redis_replica_conf:
+    external: true
+  mongodb_keyfile:
+    external: true
+  mongodb_init_script:
+    external: true

@@ -1,0 +1,444 @@
+version: '3.8'
+
+networks:
+  traefik-public:
+    external: true
+  monitoring-internal:
+    external: true
+  aifocus-internal:
+    external: true
+
+volumes:
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  alertmanager-data:
+    driver: local
+
+configs:
+  prometheus-config:
+    file: ./configs/prometheus.yml
+  alertmanager-config:
+    file: ./configs/alertmanager.yml
+  grafana-config:
+    file: ./configs/grafana.ini
+  grafana-datasources:
+    file: ./configs/grafana-datasources.yml
+  grafana-dashboards:
+    file: ./configs/grafana-dashboards.yml
+
+secrets:
+  grafana_admin_password:
+    external: true
+  alertmanager_webhook_url:
+    external: true
+
+services:
+  # ============================================================================
+  # PROMETHEUS - Metrics Collection
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    user: root
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--storage.tsdb.retention.size=10GB'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--web.external-url=https://prometheus.${DOMAIN}'
+      - '--web.route-prefix=/'
+    volumes:
+      - prometheus-data:/prometheus
+    configs:
+      - source: prometheus-config
+        target: /etc/prometheus/prometheus.yml
+    networks:
+      - traefik-public
+      - monitoring-internal
+      - aifocus-internal
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+          - node.labels.monitoring.prometheus == true
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.http.routers.prometheus.rule=Host(`prometheus.${DOMAIN}`)
+        - traefik.http.routers.prometheus.entrypoints=websecure
+        - traefik.http.routers.prometheus.tls=true
+        - traefik.http.routers.prometheus.tls.certresolver=letsencrypt
+        - traefik.http.routers.prometheus.middlewares=admin-chain
+        - traefik.http.services.prometheus.loadbalancer.server.port=9090
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ============================================================================
+  # GRAFANA - Visualization Dashboard
+  # ============================================================================
+  grafana:
+    image: grafana/grafana:10.2.2
+    user: root
+    volumes:
+      - grafana-data:/var/lib/grafana
+    configs:
+      - source: grafana-config
+        target: /etc/grafana/grafana.ini
+      - source: grafana-datasources
+        target: /etc/grafana/provisioning/datasources/datasources.yml
+      - source: grafana-dashboards
+        target: /etc/grafana/provisioning/dashboards/dashboards.yml
+    secrets:
+      - grafana_admin_password
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD_FILE=/run/secrets/grafana_admin_password
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SERVER_ROOT_URL=https://grafana.${DOMAIN}
+      - GF_SERVER_SERVE_FROM_SUB_PATH=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource,grafana-worldmap-panel,grafana-piechart-panel
+      - GF_FEATURE_TOGGLES_ENABLE=ngalert
+      - GF_UNIFIED_ALERTING_ENABLED=true
+      - GF_ALERTING_ENABLED=false
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_USERS_ALLOW_ORG_CREATE=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    networks:
+      - traefik-public
+      - monitoring-internal
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN}`)
+        - traefik.http.routers.grafana.entrypoints=websecure
+        - traefik.http.routers.grafana.tls=true
+        - traefik.http.routers.grafana.tls.certresolver=letsencrypt
+        - traefik.http.routers.grafana.middlewares=default-chain
+        - traefik.http.services.grafana.loadbalancer.server.port=3000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ============================================================================
+  # ALERTMANAGER - Alert Management
+  # ============================================================================
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=https://alertmanager.${DOMAIN}'
+      - '--web.route-prefix=/'
+      - '--cluster.listen-address=0.0.0.0:9094'
+      - '--cluster.advertise-address=:9094'
+    volumes:
+      - alertmanager-data:/alertmanager
+    configs:
+      - source: alertmanager-config
+        target: /etc/alertmanager/alertmanager.yml
+    networks:
+      - traefik-public
+      - monitoring-internal
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.http.routers.alertmanager.rule=Host(`alertmanager.${DOMAIN}`)
+        - traefik.http.routers.alertmanager.entrypoints=websecure
+        - traefik.http.routers.alertmanager.tls=true
+        - traefik.http.routers.alertmanager.tls.certresolver=letsencrypt
+        - traefik.http.routers.alertmanager.middlewares=admin-chain
+        - traefik.http.services.alertmanager.loadbalancer.server.port=9093
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # NODE EXPORTER - System Metrics
+  # ============================================================================
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.textfile.directory=/etc/node-exporter/'
+      - '--collector.systemd'
+      - '--collector.processes'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - /etc/hostname:/etc/nodename:ro
+    networks:
+      - monitoring-internal
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+
+  # ============================================================================
+  # CADVISOR - Container Metrics
+  # ============================================================================
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    command:
+      - '--housekeeping_interval=30s'
+      - '--max_housekeeping_interval=35s'
+      - '--event_storage_event_limit=default=0'
+      - '--event_storage_age_limit=default=0'
+      - '--disable_metrics=percpu,sched,tcp,udp,disk,diskIO,accelerator,hugetlb,referenced_memory,cpu_topology,resctrl'
+      - '--docker_only=true'
+      - '--store_container_labels=false'
+      - '--whitelisted_container_labels=io.kubernetes.container.name,io.kubernetes.pod.name,io.kubernetes.pod.namespace'
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - monitoring-internal
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+
+  # ============================================================================
+  # DOCKER SWARM EXPORTER - Swarm Metrics
+  # ============================================================================
+  dockerswarm-exporter:
+    image: containeroo/docker-swarm-exporter:v0.2.0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - DOCKERSWARM_EXPORTER_LOG_LEVEL=info
+    networks:
+      - monitoring-internal
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+
+  # ============================================================================
+  # BLACKBOX EXPORTER - Endpoint Monitoring
+  # ============================================================================
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.24.0
+    networks:
+      - monitoring-internal
+      - traefik-public
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == worker
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+
+  # ============================================================================
+  # LOKI - Log Aggregation
+  # ============================================================================
+  loki:
+    image: grafana/loki:2.9.2
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - /opt/aifocus/data/loki:/loki
+    networks:
+      - monitoring-internal
+      - traefik-public
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.http.routers.loki.rule=Host(`loki.${DOMAIN}`)
+        - traefik.http.routers.loki.entrypoints=websecure
+        - traefik.http.routers.loki.tls=true
+        - traefik.http.routers.loki.tls.certresolver=letsencrypt
+        - traefik.http.routers.loki.middlewares=admin-chain
+        - traefik.http.services.loki.loadbalancer.server.port=3100
+
+  # ============================================================================
+  # PROMTAIL - Log Collection
+  # ============================================================================
+  promtail:
+    image: grafana/promtail:2.9.2
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /opt/aifocus/logs:/opt/aifocus/logs:ro
+    networks:
+      - monitoring-internal
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+
+  # ============================================================================
+  # UPTIME KUMA - Uptime Monitoring
+  # ============================================================================
+  uptime-kuma:
+    image: louislam/uptime-kuma:1.23.11
+    volumes:
+      - /opt/aifocus/data/uptime-kuma:/app/data
+    networks:
+      - traefik-public
+      - monitoring-internal
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == worker
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.http.routers.uptime.rule=Host(`uptime.${DOMAIN}`)
+        - traefik.http.routers.uptime.entrypoints=websecure
+        - traefik.http.routers.uptime.tls=true
+        - traefik.http.routers.uptime.tls.certresolver=letsencrypt
+        - traefik.http.routers.uptime.middlewares=default-chain
+        - traefik.http.services.uptime.loadbalancer.server.port=3001
+
+# ============================================================================
+# CONFIGURAÇÕES DE USO
+# ============================================================================
+
+# Para usar este stack:
+# 1. Certifique-se de que as redes estão criadas:
+#    docker network create --driver overlay --attachable monitoring-internal
+#
+# 2. Configure os secrets:
+#    echo "admin-password" | docker secret create grafana_admin_password -
+#    echo "webhook-url" | docker secret create alertmanager_webhook_url -
+#
+# 3. Copie os arquivos de configuração para ./configs/
+#
+# 4. Execute o deploy:
+#    docker stack deploy -c monitoring-stack.yml monitoring
+#
+# 5. Acesse os serviços:
+#    - Grafana: https://grafana.${DOMAIN}
+#    - Prometheus: https://prometheus.${DOMAIN}
+#    - AlertManager: https://alertmanager.${DOMAIN}
+#    - Uptime Kuma: https://uptime.${DOMAIN}
+#    - Loki: https://loki.${DOMAIN} 

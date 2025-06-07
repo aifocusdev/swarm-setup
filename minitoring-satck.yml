@@ -1,0 +1,780 @@
+# ============================================================================
+# MONITORING STACK - COMPLETE OBSERVABILITY SOLUTION
+# Grafana + Prometheus + AlertManager + Loki + Tempo + Uptime Kuma
+# ============================================================================
+
+version: '3.8'
+
+services:
+  # ============================================================================
+  # PROMETHEUS - METRICS COLLECTION
+  # ============================================================================
+  
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=50GB'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--web.route-prefix=/'
+      - '--web.external-url=https://prometheus.${DOMAIN}'
+      - '--log.level=info'
+    
+    volumes:
+      - prometheus_data:/prometheus
+      - prometheus_config:/etc/prometheus
+    
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+      - source: prometheus_rules
+        target: /etc/prometheus/alert_rules.yml
+    
+    networks:
+      - traefik-public
+      - monitoring-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.monitoring.prometheus == true
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+      labels:
+        # Traefik configuration
+        - traefik.enable=true
+        - traefik.http.routers.prometheus.rule=Host(`prometheus.${DOMAIN}`)
+        - traefik.http.routers.prometheus.tls=true
+        - traefik.http.routers.prometheus.tls.certresolver=letsencrypt
+        - traefik.http.services.prometheus.loadbalancer.server.port=9090
+        - traefik.docker.network=traefik-public
+        
+        # Security
+        - traefik.http.routers.prometheus.middlewares=auth@docker,security-headers@docker
+        
+        # Prometheus discovery labels
+        - prometheus.scrape=true
+        - prometheus.port=9090
+        - prometheus.path=/metrics
+    
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # GRAFANA - VISUALIZATION & DASHBOARDS
+  # ============================================================================
+  
+  grafana:
+    image: grafana/grafana:latest
+    
+    environment:
+      # Database Configuration
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: postgres-primary:5432
+      GF_DATABASE_NAME: ${GRAFANA_DB_NAME:-grafana}
+      GF_DATABASE_USER: ${POSTGRES_USER:-grafana}
+      GF_DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      GF_DATABASE_SSL_MODE: disable
+      
+      # Server Configuration
+      GF_SERVER_DOMAIN: grafana.${DOMAIN}
+      GF_SERVER_ROOT_URL: https://grafana.${DOMAIN}
+      GF_SERVER_SERVE_FROM_SUB_PATH: false
+      
+      # Security Configuration
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_SECURITY_SECRET_KEY: ${GRAFANA_SECRET_KEY}
+      GF_SECURITY_DISABLE_GRAVATAR: true
+      GF_SECURITY_COOKIE_SECURE: true
+      GF_SECURITY_COOKIE_SAMESITE: strict
+      
+      # Authentication
+      GF_AUTH_DISABLE_LOGIN_FORM: false
+      GF_AUTH_DISABLE_SIGNOUT_MENU: false
+      GF_AUTH_ANONYMOUS_ENABLED: false
+      
+      # SMTP Configuration
+      GF_SMTP_ENABLED: true
+      GF_SMTP_HOST: ${SMTP_ADDRESS}:${SMTP_PORT:-587}
+      GF_SMTP_USER: ${SMTP_USERNAME}
+      GF_SMTP_PASSWORD: ${SMTP_PASSWORD}
+      GF_SMTP_FROM_ADDRESS: ${MAILER_SENDER_EMAIL:-noreply@${DOMAIN}}
+      GF_SMTP_FROM_NAME: "AiFocus Grafana"
+      GF_SMTP_SKIP_VERIFY: false
+      
+      # Features
+      GF_FEATURE_TOGGLES_ENABLE: publicDashboards,topnav,traceqlEditor
+      GF_ANALYTICS_REPORTING_ENABLED: false
+      GF_ANALYTICS_CHECK_FOR_UPDATES: false
+      GF_ALERTING_ENABLED: true
+      
+      # Logging
+      GF_LOG_MODE: console
+      GF_LOG_LEVEL: info
+      
+      # Plugins
+      GF_INSTALL_PLUGINS: grafana-piechart-panel,grafana-worldmap-panel,grafana-clock-panel,natel-discrete-panel,vonage-status-panel
+      
+      # Rendering
+      GF_RENDERING_SERVER_URL: http://grafana-renderer:8081/render
+      GF_RENDERING_CALLBACK_URL: http://grafana:3000/
+      
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - grafana_provisioning:/etc/grafana/provisioning
+      - grafana_dashboards:/var/lib/grafana/dashboards
+    
+    configs:
+      - source: grafana_datasources
+        target: /etc/grafana/provisioning/datasources/datasources.yml
+      - source: grafana_dashboards_config
+        target: /etc/grafana/provisioning/dashboards/dashboards.yml
+    
+    networks:
+      - traefik-public
+      - monitoring-internal
+      - database-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == worker
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+      labels:
+        # Traefik configuration
+        - traefik.enable=true
+        - traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN}`)
+        - traefik.http.routers.grafana.tls=true
+        - traefik.http.routers.grafana.tls.certresolver=letsencrypt
+        - traefik.http.services.grafana.loadbalancer.server.port=3000
+        - traefik.docker.network=traefik-public
+        
+        # Session stickiness
+        - traefik.http.services.grafana.loadbalancer.sticky.cookie=true
+        - traefik.http.services.grafana.loadbalancer.sticky.cookie.name=grafana_session
+        
+        # Security headers
+        - traefik.http.routers.grafana.middlewares=security-headers@docker
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    depends_on:
+      - postgres-primary
+      - prometheus
+
+  # ============================================================================
+  # GRAFANA RENDERER - PDF/PNG Generation
+  # ============================================================================
+  
+  grafana-renderer:
+    image: grafana/grafana-image-renderer:latest
+    
+    environment:
+      ENABLE_METRICS: true
+      HTTP_PORT: 8081
+      LOG_LEVEL: info
+    
+    networks:
+      - monitoring-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == worker
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.2'
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # ALERTMANAGER - ALERT ROUTING
+  # ============================================================================
+  
+  alertmanager:
+    image: prom/alertmanager:latest
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=https://alertmanager.${DOMAIN}'
+      - '--web.route-prefix=/'
+      - '--cluster.listen-address=0.0.0.0:9094'
+      - '--log.level=info'
+    
+    volumes:
+      - alertmanager_data:/alertmanager
+    
+    configs:
+      - source: alertmanager_config
+        target: /etc/alertmanager/alertmanager.yml
+    
+    networks:
+      - traefik-public
+      - monitoring-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.monitoring.alertmanager == true
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.3'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+      labels:
+        # Traefik configuration
+        - traefik.enable=true
+        - traefik.http.routers.alertmanager.rule=Host(`alertmanager.${DOMAIN}`)
+        - traefik.http.routers.alertmanager.tls=true
+        - traefik.http.routers.alertmanager.tls.certresolver=letsencrypt
+        - traefik.http.services.alertmanager.loadbalancer.server.port=9093
+        - traefik.docker.network=traefik-public
+        
+        # Security
+        - traefik.http.routers.alertmanager.middlewares=auth@docker,security-headers@docker
+    
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # LOKI - LOG AGGREGATION
+  # ============================================================================
+  
+  loki:
+    image: grafana/loki:latest
+    command: -config.file=/etc/loki/local-config.yaml
+    
+    volumes:
+      - loki_data:/loki
+    
+    configs:
+      - source: loki_config
+        target: /etc/loki/local-config.yaml
+    
+    networks:
+      - monitoring-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.monitoring.loki == true
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+      labels:
+        - loki.scrape=true
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # PROMTAIL - LOG SHIPPING
+  # ============================================================================
+  
+  promtail:
+    image: grafana/promtail:latest
+    command: -config.file=/etc/promtail/config.yml
+    
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - promtail_data:/promtail
+    
+    configs:
+      - source: promtail_config
+        target: /etc/promtail/config.yml
+    
+    networks:
+      - monitoring-internal
+    
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.platform.os == linux
+      update_config:
+        parallelism: 2
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.2'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+      labels:
+        - promtail.agent=true
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9080/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    
+    depends_on:
+      - loki
+
+  # ============================================================================
+  # TEMPO - DISTRIBUTED TRACING
+  # ============================================================================
+  
+  tempo:
+    image: grafana/tempo:latest
+    command: 
+      - "-config.file=/etc/tempo.yaml"
+    
+    volumes:
+      - tempo_data:/tmp/tempo
+    
+    configs:
+      - source: tempo_config
+        target: /etc/tempo.yaml
+    
+    networks:
+      - monitoring-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.monitoring.tempo == true
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.2'
+      labels:
+        - tempo.scrape=true
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3200/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # NODE EXPORTER - HOST METRICS
+  # ============================================================================
+  
+  node-exporter:
+    image: prom/node-exporter:latest
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)'
+      - '--collector.textfile.directory=/var/lib/node_exporter/textfile_collector'
+    
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - node_exporter_data:/var/lib/node_exporter
+    
+    networks:
+      - monitoring-internal
+    
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.platform.os == linux
+      update_config:
+        parallelism: 2
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.2'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+      labels:
+        - prometheus.scrape=true
+        - prometheus.port=9100
+        - prometheus.path=/metrics
+    
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9100/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ============================================================================
+  # CADVISOR - CONTAINER METRICS
+  # ============================================================================
+  
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    command:
+      - '--housekeeping_interval=30s'
+      - '--max_housekeeping_interval=35s'
+      - '--allow_dynamic_housekeeping=true'
+      - '--global_housekeeping_interval=30s'
+      - '--docker_only=true'
+    
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    
+    networks:
+      - monitoring-internal
+    
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.platform.os == linux
+      update_config:
+        parallelism: 2
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.3'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+      labels:
+        - prometheus.scrape=true
+        - prometheus.port=8080
+        - prometheus.path=/metrics
+    
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # UPTIME KUMA - UPTIME MONITORING
+  # ============================================================================
+  
+  uptime-kuma:
+    image: louislam/uptime-kuma:latest
+    
+    volumes:
+      - uptime_kuma_data:/app/data
+    
+    networks:
+      - traefik-public
+      - monitoring-internal
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.2'
+      labels:
+        # Traefik configuration
+        - traefik.enable=true
+        - traefik.http.routers.uptime-kuma.rule=Host(`uptime.${DOMAIN}`)
+        - traefik.http.routers.uptime-kuma.tls=true
+        - traefik.http.routers.uptime-kuma.tls.certresolver=letsencrypt
+        - traefik.http.services.uptime-kuma.loadbalancer.server.port=3001
+        - traefik.docker.network=traefik-public
+        
+        # WebSocket support
+        - traefik.http.routers.uptime-kuma.middlewares=uptime-headers@docker
+        - traefik.http.middlewares.uptime-headers.headers.customRequestHeaders.X-Forwarded-Proto=https
+        
+        # Security
+        - traefik.http.routers.uptime-kuma.middlewares=security-headers@docker
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3001/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+
+volumes:
+  # Prometheus
+  prometheus_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/prometheus
+  
+  prometheus_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/config/prometheus
+  
+  # Grafana
+  grafana_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/grafana
+  
+  grafana_provisioning:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/config/grafana/provisioning
+  
+  grafana_dashboards:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/config/grafana/dashboards
+  
+  # AlertManager
+  alertmanager_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/alertmanager
+  
+  # Loki
+  loki_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/loki
+  
+  # Promtail
+  promtail_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/promtail
+  
+  # Tempo
+  tempo_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/tempo
+  
+  # Node Exporter
+  node_exporter_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/node-exporter
+  
+  # Uptime Kuma
+  uptime_kuma_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/aifocus/data/uptime-kuma
+
+# ============================================================================
+# NETWORKS
+# ============================================================================
+
+networks:
+  traefik-public:
+    external: true
+  
+  database-internal:
+    external: true
+  
+  monitoring-internal:
+    driver: overlay
+    attachable: true
+    ipam:
+      config:
+        - subnet: 172.24.0.0/16
+
+# ============================================================================
+# CONFIGS
+# ============================================================================
+
+configs:
+  prometheus_config:
+    external: true
+  prometheus_rules:
+    external: true
+  grafana_datasources:
+    external: true
+  grafana_dashboards_config:
+    external: true
+  alertmanager_config:
+    external: true
+  loki_config:
+    external: true
+  promtail_config:
+    external: true
+  tempo_config:
+    external: true
