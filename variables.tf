@@ -48,6 +48,7 @@ variable "project_name" {
 variable "domain" {
   description = "Main domain name (e.g., example.com)"
   type        = string
+  default     = "aifocus.dev"
 }
 
 variable "email" {
@@ -280,5 +281,33 @@ variable "tags" {
     "ManagedBy"   = "Terraform"
     "Project"     = "AiFocus-Swarm"
     "Environment" = "Production"
+  }
+}
+
+# ============================================================================
+# VARIÁVEIS DE CONFIGURAÇÃO - AIFOCUS SWARM
+# ============================================================================
+
+# Configurações básicas do cluster
+variable "cluster_name" {
+  description = "Nome do cluster Docker Swarm"
+  type        = string
+  default     = "aifocus-swarm"
+}
+
+variable "location" {
+  description = "Localização dos recursos (alias para datacenter_location)"
+  type        = string
+  default     = "nbg1"
+}
+
+variable "datacenter_location" {
+  description = "Localização do datacenter (nbg1, fsn1, hel1, ash)"
+  type        = string
+  default     = "nbg1"
+  
+  validation {
+    condition = contains(["nbg1", "fsn1", "hel1", "ash"], var.datacenter_location)
+    error_message = "Localização deve ser uma das: nbg1, fsn1, hel1, ash."
   }
 } 

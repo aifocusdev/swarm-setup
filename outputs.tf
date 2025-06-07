@@ -34,7 +34,7 @@ output "manager_nodes" {
       id         = server.id
       name       = server.name
       public_ip  = server.ipv4_address
-      private_ip = server.network[0].ip
+      private_ip = [for network in server.network : network.ip if network.ip != null][0]
       location   = server.location
       server_type = server.server_type
       status     = server.status
@@ -48,8 +48,8 @@ output "manager_public_ips" {
 }
 
 output "manager_private_ips" {
-  description = "Private IP addresses of manager nodes"
-  value       = [for server in hcloud_server.swarm_manager : server.network[0].ip]
+  description = "Private IP addresses of manager nodes"  
+  value       = [for server in hcloud_server.swarm_manager : [for network in server.network : network.ip if network.ip != null][0]]
 }
 
 output "primary_manager_ip" {
@@ -59,7 +59,7 @@ output "primary_manager_ip" {
 
 output "primary_manager_private_ip" {
   description = "Private IP of the primary manager node"
-  value       = hcloud_server.swarm_manager[0].network[0].ip
+  value       = [for network in hcloud_server.swarm_manager[0].network : network.ip if network.ip != null][0]
 }
 
 # ============================================================================
@@ -74,7 +74,7 @@ output "worker_nodes" {
       id         = server.id
       name       = server.name
       public_ip  = server.ipv4_address
-      private_ip = server.network[0].ip
+      private_ip = [for network in server.network : network.ip if network.ip != null][0]
       location   = server.location
       server_type = server.server_type
       status     = server.status
@@ -89,7 +89,7 @@ output "worker_public_ips" {
 
 output "worker_private_ips" {
   description = "Private IP addresses of worker nodes"
-  value       = var.worker_count > 0 ? [for server in hcloud_server.swarm_worker : server.network[0].ip] : []
+  value       = var.worker_count > 0 ? [for server in hcloud_server.swarm_worker : [for network in server.network : network.ip if network.ip != null][0]] : []
 }
 
 # ============================================================================
@@ -113,7 +113,7 @@ output "load_balancer_public_ip" {
   value       = var.enable_load_balancer ? hcloud_load_balancer.aifocus_lb[0].ipv4 : null
 }
 
-# ============================================================================
+# ============================================================================ 
 # FLOATING IP INFORMATION
 # ============================================================================
 
@@ -154,32 +154,33 @@ output "volumes_info" {
 # DNS INFORMATION
 # ============================================================================
 
-output "dns_records" {
-  description = "DNS records created"
-  value = var.cloudflare_token != "" ? {
-    main_domain = {
-      name    = cloudflare_record.aifocus_main[0].name
-      type    = cloudflare_record.aifocus_main[0].type
-      value   = cloudflare_record.aifocus_main[0].value
-      proxied = cloudflare_record.aifocus_main[0].proxied
-    }
-    wildcard = {
-      name    = cloudflare_record.aifocus_wildcard[0].name
-      type    = cloudflare_record.aifocus_wildcard[0].type
-      value   = cloudflare_record.aifocus_wildcard[0].value
-      proxied = cloudflare_record.aifocus_wildcard[0].proxied
-    }
-    services = {
-      for record in cloudflare_record.aifocus_services :
-      record.name => {
-        name    = record.name
-        type    = record.type
-        value   = record.value
-        proxied = record.proxied
-      }
-    }
-  } : null
-}
+# output "dns_records" {
+#   description = "DNS records created"
+#   sensitive   = true
+#   value = var.cloudflare_token != "" ? {
+#     main_domain = {
+#       name    = cloudflare_record.aifocus_main[0].name
+#       type    = cloudflare_record.aifocus_main[0].type
+#       content = cloudflare_record.aifocus_main[0].content
+#       proxied = cloudflare_record.aifocus_main[0].proxied
+#     }
+#     wildcard = {
+#       name    = cloudflare_record.aifocus_wildcard[0].name
+#       type    = cloudflare_record.aifocus_wildcard[0].type
+#       content = cloudflare_record.aifocus_wildcard[0].content
+#       proxied = cloudflare_record.aifocus_wildcard[0].proxied
+#     }
+#     services = {
+#       for record in cloudflare_record.aifocus_services :
+#       record.name => {
+#         name    = record.name
+#         type    = record.type
+#         content = record.content
+#         proxied = record.proxied
+#       }
+#     }
+#   } : null
+# }
 
 # ============================================================================
 # CONNECTION INFORMATION
@@ -201,7 +202,7 @@ output "ssh_connection_commands" {
 
 output "docker_swarm_init_command" {
   description = "Command to initialize Docker Swarm (run on primary manager)"
-  value       = "docker swarm init --advertise-addr ${hcloud_server.swarm_manager[0].network[0].ip}"
+  value       = "docker swarm init --advertise-addr ${[for network in hcloud_server.swarm_manager[0].network : network.ip if network.ip != null][0]}"
 }
 
 output "docker_swarm_join_token_command" {
@@ -236,6 +237,7 @@ output "access_urls" {
 
 output "deployment_summary" {
   description = "Summary of the deployment"
+  sensitive   = true
   value = {
     environment          = var.environment
     domain              = var.domain
@@ -248,44 +250,49 @@ output "deployment_summary" {
     backups_enabled     = var.enable_backups
     firewall_enabled    = var.enable_firewall
     cloudflare_enabled  = var.cloudflare_token != ""
-    primary_manager_ip  = hcloud_server.swarm_manager[0].ipv4_address
-    floating_ip         = hcloud_floating_ip.aifocus_floating_ip.ip_address
-    network_range       = hcloud_network.aifocus_network.ip_range
   }
 }
 
 # ============================================================================
-# NEXT STEPS
+# COST INFORMATION
 # ============================================================================
 
-output "next_steps" {
-  description = "Next steps after Terraform deployment"
-  value = [
-    "1. Connect to primary manager: ssh -i ${var.ssh_private_key_path} root@${hcloud_server.swarm_manager[0].ipv4_address}",
-    "2. Check Docker Swarm status: docker node ls",
-    "3. Deploy Traefik stack: docker stack deploy -c traefik.yml traefik",
-    "4. Deploy Portainer stack: docker stack deploy -c portainer.yml portainer",
-    "5. Access Portainer: https://portainer.${var.domain}",
-    "6. Deploy application stacks through Portainer or CLI",
-    "7. Configure monitoring: docker stack deploy -c monitoring-stack.yml monitoring",
-    "8. Set up backups and configure alerts"
-  ]
+output "estimated_monthly_cost" {
+  description = "Custo mensal estimado em EUR"
+  value = {
+    managers      = var.manager_count * 15.11  # cx31 cost
+    workers       = var.worker_count * 7.00    # cx21 cost
+    load_balancer = var.enable_load_balancer ? 5.83 : 0.00
+    network       = 0.00
+    firewall      = 0.00
+    total         = (var.manager_count * 15.11) + (var.worker_count * 7.00) + (var.enable_load_balancer ? 5.83 : 0.00)
+  }
 }
 
 # ============================================================================
-# IMPORTANT NOTES
+# NEXT STEPS & INSTRUCTIONS
 # ============================================================================
 
-output "important_notes" {
-  description = "Important notes about the deployment"
+output "next_steps" {
+  description = "Important next steps after deployment"
   value = [
-    "🔒 Make sure to configure proper firewall rules for production",
-    "📊 Monitoring stack will be available at https://grafana.${var.domain}",
-    "🔄 Automatic backups are ${var.enable_backups ? "ENABLED" : "DISABLED"}",
-    "🌐 DNS records ${var.cloudflare_token != "" ? "have been" : "need to be"} configured",
-    "🔑 SSH keys are configured - keep your private key secure",
-    "📦 Volumes ${var.enable_volumes ? "are attached" : "are not configured"} to worker nodes",
-    "⚖️  Load balancer is ${var.enable_load_balancer ? "configured" : "not configured"}",
+    "🎉 DEPLOY CONCLUÍDO COM SUCESSO!",
+    "⏱️  Aguarde 5-10 minutos para configuração completa dos servidores",
+    "🌐 Acesse Portainer: https://portainer.${var.domain}",
+    "🌐 Acesse Traefik: https://traefik.${var.domain}",
+    "🌐 Acesse Grafana: https://grafana.${var.domain}",
+    "🔐 Configure senhas nos primeiros acessos",
+    "📊 Custo mensal estimado: €${(var.manager_count * 15.11) + (var.worker_count * 7.00) + (var.enable_load_balancer ? 5.83 : 0.00)}"
+  ]
+}
+
+output "important_notes" {
+  description = "Important security and operational notes"
+  value = [
+    "🔒 Change default passwords immediately after first login",
+    "🔐 Regenerate API tokens after initial setup for security", 
+    "📱 Configure monitoring alerts for production use",
+    "💾 Set up automated backups for critical data",
     "🛡️  Firewall is ${var.enable_firewall ? "enabled" : "disabled"} - review security settings"
   ]
 } 

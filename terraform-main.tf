@@ -25,9 +25,9 @@ provider "hcloud" {
   token = var.hetzner_token
 }
 
-provider "cloudflare" {
-  api_token = var.cloudflare_token
-}
+# provider "cloudflare" {
+#   api_token = var.cloudflare_token
+# }
 
 # ============================================================================
 # DATA SOURCES
@@ -37,10 +37,10 @@ data "hcloud_ssh_key" "default" {
   name = var.ssh_key_name
 }
 
-data "cloudflare_zone" "domain" {
-  count = var.cloudflare_token != "" ? 1 : 0
-  name  = var.domain
-}
+# data "cloudflare_zone" "domain" {
+#   count = var.cloudflare_token != "" ? 1 : 0
+#   name  = var.domain
+# }
 
 # ============================================================================
 # NETWORK CONFIGURATION
@@ -378,55 +378,55 @@ resource "hcloud_firewall_attachment" "aifocus_firewall_worker" {
 }
 
 # ============================================================================
-# DNS RECORDS (Cloudflare)
+# DNS RECORDS (Cloudflare) - TEMPORARIAMENTE DESABILITADO
 # ============================================================================
 
-# Main domain pointing to Load Balancer
-resource "cloudflare_record" "aifocus_main" {
-  count   = var.cloudflare_token != "" ? 1 : 0
-  zone_id = data.cloudflare_zone.domain[0].id
-  name    = var.domain
-  value   = var.enable_load_balancer ? hcloud_load_balancer.aifocus_lb[0].ipv4 : hcloud_floating_ip.aifocus_floating_ip.ip_address
-  type    = "A"
-  ttl     = 300
-  proxied = var.cloudflare_proxied
-}
+# # Main domain pointing to Load Balancer
+# resource "cloudflare_record" "aifocus_main" {
+#   count   = var.cloudflare_token != "" ? 1 : 0
+#   zone_id = data.cloudflare_zone.domain[0].id
+#   name    = var.domain
+#   value   = var.enable_load_balancer ? hcloud_load_balancer.aifocus_lb[0].ipv4 : hcloud_floating_ip.aifocus_floating_ip.ip_address
+#   type    = "A"
+#   ttl     = 300
+#   proxied = var.cloudflare_proxied
+# }
 
-# Wildcard subdomain
-resource "cloudflare_record" "aifocus_wildcard" {
-  count   = var.cloudflare_token != "" ? 1 : 0
-  zone_id = data.cloudflare_zone.domain[0].id
-  name    = "*"
-  value   = var.enable_load_balancer ? hcloud_load_balancer.aifocus_lb[0].ipv4 : hcloud_floating_ip.aifocus_floating_ip.ip_address
-  type    = "A"
-  ttl     = 300
-  proxied = false
-}
+# # Wildcard subdomain
+# resource "cloudflare_record" "aifocus_wildcard" {
+#   count   = var.cloudflare_token != "" ? 1 : 0
+#   zone_id = data.cloudflare_zone.domain[0].id
+#   name    = "*"
+#   value   = var.enable_load_balancer ? hcloud_load_balancer.aifocus_lb[0].ipv4 : hcloud_floating_ip.aifocus_floating_ip.ip_address
+#   type    = "A"
+#   ttl     = 300
+#   proxied = false
+# }
 
-# Service-specific subdomains
-locals {
-  subdomains = [
-    "traefik",
-    "portainer", 
-    "chatwoot",
-    "evolution",
-    "n8n",
-    "typebot",
-    "grafana",
-    "prometheus",
-    "uptime",
-    "minio",
-    "pgadmin",
-    "redis-insight"
-  ]
-}
+# # Service-specific subdomains
+# locals {
+#   subdomains = [
+#     "traefik",
+#     "portainer", 
+#     "chatwoot",
+#     "evolution",
+#     "n8n",
+#     "typebot",
+#     "grafana",
+#     "prometheus",
+#     "uptime",
+#     "minio",
+#     "pgadmin",
+#     "redis-insight"
+#   ]
+# }
 
-resource "cloudflare_record" "aifocus_services" {
-  count   = var.cloudflare_token != "" ? length(local.subdomains) : 0
-  zone_id = data.cloudflare_zone.domain[0].id
-  name    = local.subdomains[count.index]
-  value   = var.enable_load_balancer ? hcloud_load_balancer.aifocus_lb[0].ipv4 : hcloud_floating_ip.aifocus_floating_ip.ip_address
-  type    = "A"
-  ttl     = 300
-  proxied = false
-}
+# resource "cloudflare_record" "aifocus_services" {
+#   count   = var.cloudflare_token != "" ? length(local.subdomains) : 0
+#   zone_id = data.cloudflare_zone.domain[0].id
+#   name    = local.subdomains[count.index]
+#   value   = var.enable_load_balancer ? hcloud_load_balancer.aifocus_lb[0].ipv4 : hcloud_floating_ip.aifocus_floating_ip.ip_address
+#   type    = "A"
+#   ttl     = 300
+#   proxied = false
+# }
